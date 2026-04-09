@@ -1,0 +1,1466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Polymarket — 5m Up/Down</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">Polymarket <span class="muted">5m Up/Down</span></div>
+    <div class="wallet" id="wallet-strip">
+      <span class="muted">Loading wallet…</span>
+    </div>
+  </header>
+
+  <div class="main-layout">
+    <section class="chart-section">
+      <div class="chart-head">
+        <div class="chart-title-block">
+          <h1 class="market-title" id="chart-market-title">Bitcoin Up or Down — 5 Minutes</h1>
+          <p class="window-label muted" id="chart-window-label"></p>
+        </div>
+        <div class="chart-asset-row">
+          <label class="inline-label muted">Chart asset
+            <select id="chart-asset"></select>
+          </label>
+        </div>
+      </div>
+
+      <div class="metrics-row">
+        <div class="metric">
+          <div class="metric-label">Price to beat <span class="approx-tag">(approx.)</span></div>
+          <div class="metric-value" id="metric-strike">—</div>
+          <p class="metric-strike-note muted" id="metric-strike-note"></p>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Current</div>
+          <div class="metric-value metric-live" id="metric-spot">—</div>
+        </div>
+        <div class="metric metric-countdown">
+          <div class="metric-label">Time left</div>
+          <div class="metric-value countdown" id="metric-countdown">—:—</div>
+        </div>
+      </div>
+
+      <p class="chart-disclaimer muted small">
+        <strong>Price to beat</strong> is taken from <code>polymarket.com/api/series?…&amp;withMetadata=true</code>
+        when Polymarket exposes it (same field as the website). During the live window that value is often empty;
+        we then <strong>latch</strong> the first Chainlink RTDS tick whose oracle timestamp is ≥ the market’s
+        <code>eventStartTime</code> (same feed Polymarket resolves on). Until then, a Binance 1m estimate may show.
+        Orange line = RTDS; gray history = Binance 1m closes (shape only).
+      </p>
+
+      <div class="chart-wrap">
+        <canvas id="price-chart"></canvas>
+      </div>
+    </section>
+
+    <aside class="trade-sidebar">
+      <div class="tabs">
+        <button type="button" class="tab active" data-tab="buy">Buy</button>
+        <button type="button" class="tab" data-tab="sell">Sell</button>
+      </div>
+
+      <div class="outcome-buttons" id="outcome-buttons">
+        <button type="button" class="outcome up" id="btn-up">
+          <span class="outcome-name">Up</span>
+          <span class="outcome-price" id="btn-up-price">—</span>
+        </button>
+        <button type="button" class="outcome down" id="btn-down">
+          <span class="outcome-name">Down</span>
+          <span class="outcome-price" id="btn-down-price">—</span>
+        </button>
+      </div>
+
+      <section class="signal-panel" id="signal-panel" aria-labelledby="signal-heading">
+        <div class="signal-panel-head">
+          <h3 class="signal-heading" id="signal-heading">Insight</h3>
+          <span class="signal-model-tag muted">model + book</span>
+        </div>
+        <div class="signal-pill-row">
+          <span class="signal-pill signal-neutral" id="signal-primary">—</span>
+          <span class="signal-confidence muted small" id="signal-confidence"></span>
+        </div>
+        <p class="signal-metrics muted small" id="signal-metrics"></p>
+        <ul class="signal-reasons small" id="signal-reasons"></ul>
+        <div class="signal-sell-block muted small" id="signal-sell-block"></div>
+        <button type="button" class="signal-apply muted small" id="signal-apply" hidden>
+          Use for trade form →
+        </button>
+        <p class="signal-disclaimer muted small">
+          Leans tie <strong>executable asks</strong> and <strong>spot vs strike</strong>; exit line uses <strong>bids vs fair</strong> (use <strong>Sell</strong> with a detected balance for position-specific text).
+          No model guarantees wins — check <strong>Signal calibration</strong> below against Binance-resolved history.
+          Not financial advice.
+        </p>
+      </section>
+
+      <form id="sidebar-order" class="sidebar-order">
+        <label class="amount-label muted" id="sidebar-amount-label">Amount (USDC)</label>
+        <div class="amount-input-wrap buy-mode" id="sidebar-amount-wrap">
+          <span class="dollar" id="sidebar-dollar">$</span>
+          <input type="number" id="sidebar-amount" min="0" step="0.01" value="0" placeholder="0" />
+        </div>
+        <div class="quick-amt" id="quick-buy-amt">
+          <button type="button" data-amt="1">+$1</button>
+          <button type="button" data-amt="5">+$5</button>
+          <button type="button" data-amt="10">+$10</button>
+          <button type="button" data-amt="100">+$100</button>
+        </div>
+        <div class="quick-amt hidden" id="quick-sell-amt">
+          <button type="button" data-shares="5">+5</button>
+          <button type="button" data-shares="10">+10</button>
+          <button type="button" data-shares="25">+25</button>
+          <button type="button" id="sidebar-max">Max</button>
+        </div>
+        <p class="sidebar-estimate muted small" id="sidebar-estimate"></p>
+        <p class="balance-hint muted small" id="sidebar-balance">Balance —</p>
+        <p class="sidebar-toast muted small" id="sidebar-toast" hidden></p>
+        <p class="sidebar-gate-hint muted small" id="sidebar-gate-hint" hidden></p>
+        <button type="submit" class="cta-buy" id="sidebar-submit" disabled>Buy Up</button>
+      </form>
+
+      <a class="pm-external" id="pm-external-link" href="#" target="_blank" rel="noopener">Trade on Polymarket →</a>
+    </aside>
+  </div>
+
+  <section class="panel grid-panel">
+    <h2>All markets (this window)</h2>
+    <div class="mini-grid" id="markets"></div>
+  </section>
+
+  <section class="panel orders-panel">
+    <h2>Open orders</h2>
+    <div id="orders" class="orders muted">Loading…</div>
+  </section>
+
+  <section class="panel calibration-panel">
+    <h2>Signal calibration</h2>
+    <p class="muted small calibration-intro">
+      Logged each time Insight runs: latest <strong>P(Up)</strong> vs outcome inferred from
+      <strong>Binance 1m close</strong> at window end and your logged strike (Polymarket may differ slightly).
+      Bars = empirical frequency Up won in each predicted-probability bucket; line = average prediction in bucket (ideal: on top of bars).
+    </p>
+    <div class="calibration-toolbar">
+      <label class="inline-label muted">Asset
+        <select id="calibration-asset">
+          <option value="">All</option>
+          <option value="BTC">BTC</option>
+          <option value="ETH">ETH</option>
+          <option value="SOL">SOL</option>
+          <option value="XRP">XRP</option>
+        </select>
+      </label>
+    </div>
+    <div class="calibration-chart-wrap">
+      <canvas id="calibration-chart"></canvas>
+    </div>
+    <div id="calibration-stats" class="calibration-stats muted small"></div>
+  </section>
+
+  <section class="panel trade-panel advanced-panel">
+    <h2>Advanced: limit order (CLOB)</h2>
+    <p class="hint muted" id="trade-gate"></p>
+    <form id="order-form" class="order-form">
+      <label>Asset
+        <select id="of-asset"></select>
+      </label>
+      <label>Side
+        <select id="of-side-outcome">
+          <option value="0">Up (first token)</option>
+          <option value="1">Down (second token)</option>
+        </select>
+      </label>
+      <label>Buy / Sell
+        <select id="of-side">
+          <option value="BUY">BUY</option>
+          <option value="SELL">SELL</option>
+        </select>
+      </label>
+      <label>Price (0–1)
+        <input id="of-price" type="number" step="0.001" min="0.001" max="0.999" value="0.5" />
+      </label>
+      <label>Size (shares)
+        <input id="of-size" type="number" step="1" min="1" value="5" />
+      </label>
+      <button type="submit" id="of-submit" disabled>Submit order</button>
+    </form>
+    <pre id="order-result" class="result"></pre>
+  </section>
+
+  <footer class="footer muted">
+    Live stream: Polymarket RTDS (<code>crypto_prices_chainlink</code>). Auth for orders:
+    <a href="https://docs.polymarket.com/api-reference/authentication" target="_blank" rel="noopener">Polymarket CLOB</a>.
+    Sidebar: Buy spends USDC at best ask; Sell sells whole shares at best bid (GTC limit). Enable posting/cancel via <code>DASHBOARD_ENABLE_ORDER_POST=true</code>.
+  </footer>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    function esc(s) {
+      return String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function shortAddr(addr) {
+      if (!addr || String(addr).length < 14) return addr || "—";
+      const a = String(addr);
+      return a.slice(0, 6) + "…" + a.slice(-4);
+    }
+
+    /** CLOB collateral balance is USDC (6 decimals on Polygon). */
+    function formatCollateralSummary(col) {
+      if (!col || typeof col !== "object") return { html: "" };
+      const raw = col.balance;
+      let usdc = null;
+      if (raw != null && raw !== "") {
+        const n = typeof raw === "string" ? parseFloat(raw) : Number(raw);
+        if (Number.isFinite(n)) usdc = n / 1e6;
+      }
+      const nAllow = col.allowances && typeof col.allowances === "object"
+        ? Object.keys(col.allowances).length
+        : 0;
+      let html = "";
+      if (usdc != null) {
+        html +=
+          "<div class=\"wallet-balance\"><span class=\"wallet-bal-label\">USDC (CLOB)</span> " +
+          "<strong class=\"wallet-bal-amt\">" +
+          usdc.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }) +
+          "</strong></div>";
+      }
+      if (nAllow > 0) {
+        html +=
+          "<div class=\"wallet-meta muted\">" +
+          nAllow +
+          " contract allowance" +
+          (nAllow === 1 ? "" : "s") +
+          " set · raw JSON in browser devtools if needed</div>";
+      }
+      return { html };
+    }
+
+    const FIVE_MIN = 300;
+    let lastPayload = null;
+    let chart = null;
+    let priceWs = null;
+    let rtdsPingTimer = null;
+    let liveSymbolExpected = "";
+    let bootstrap = null;
+    let tradeTab = "buy";
+    let sidebarOutcome = "up";
+    let lastMe = { trading_enabled: false, authenticated: false };
+    let sidebarPositionShares = null;
+    /** Latest Chainlink RTDS price (same feed as chart) for /api/signal. */
+    let lastChainlinkSpot = null;
+    let lastSignalPrimary = null;
+    let calibrationChart = null;
+    let calibrationSkip = 0;
+    let sidebarPositionFetchAt = 0;
+    let lastSidebarPositionWindowTs = null;
+    const SIDEBAR_POSITION_MIN_MS = 8000;
+    const MAX_LIVE_POINTS = 720;
+    const liveQueue = [];
+    let liveFlushScheduled = false;
+
+    function fmtMoney(n) {
+      if (n == null || Number.isNaN(n)) return "—";
+      return "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function fmtClock(ts) {
+      return new Date(ts * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    }
+
+    function countdown(endTs, nowTs) {
+      let s = Math.max(0, endTs - nowTs);
+      const m = Math.floor(s / 60);
+      s = s % 60;
+      return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+    }
+
+    function priceCell(p) {
+      if (p == null) return "—";
+      return (p * 100).toFixed(1) + "¢";
+    }
+
+    function currentWindowTs() {
+      return Math.floor(Date.now() / 1000 / FIVE_MIN) * FIVE_MIN;
+    }
+
+    const PTB_STORAGE_PREFIX = "polymarket_ptb_v1:";
+
+    function readLatchedPriceToBeat(slug) {
+      try {
+        const j = JSON.parse(sessionStorage.getItem(PTB_STORAGE_PREFIX + slug) || "null");
+        return j && j.v != null && Number.isFinite(j.v) ? j.v : null;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function getEffectiveStrike() {
+      if (!bootstrap) return null;
+      if (bootstrap.strike_polymarket_official != null) return bootstrap.strike_polymarket_official;
+      const latched = readLatchedPriceToBeat(bootstrap.slug);
+      if (latched != null) return latched;
+      if (bootstrap.strike_binance_fallback != null) return bootstrap.strike_binance_fallback;
+      return bootstrap.strike;
+    }
+
+    function getStrikeQualityParam() {
+      if (!bootstrap) return "unknown";
+      if (bootstrap.strike_polymarket_official != null) return "official";
+      if (readLatchedPriceToBeat(bootstrap.slug) != null) return "latched";
+      if (bootstrap.strike_source === "binance_1m_open") return "binance_1m_open";
+      return "unknown";
+    }
+
+    function updateStrikeNote() {
+      const el = $("metric-strike-note");
+      if (!bootstrap) return;
+      if (bootstrap.strike_polymarket_official != null) {
+        el.textContent =
+          "Official polymarket.com value (eventMetadata.priceToBeat) — matches the site.";
+      } else if (readLatchedPriceToBeat(bootstrap.slug) != null) {
+        el.textContent =
+          "Chainlink RTDS latch: earliest oracle tick at/after event start (same feed as resolution).";
+      } else if (bootstrap.strike_source === "binance_1m_open") {
+        el.textContent =
+          "Temporary Binance 1m estimate. Keep this tab open; we switch to Polymarket API or RTDS latch when available.";
+      } else {
+        el.textContent = "Waiting for strike…";
+      }
+    }
+
+    function applyStrikeToChart(s) {
+      if (s == null || !Number.isFinite(s) || !chart || !bootstrap) return;
+      const xMin = bootstrap.event_start_ms;
+      const xMax = Math.max(Number(bootstrap.window_end_ms), Date.now() + 15_000);
+      chart.data.datasets[1].data = [
+        { x: xMin, y: s },
+        { x: xMax, y: s },
+      ];
+      const d0 = chart.data.datasets[0].data;
+      if (d0.length && d0[0].x === xMin) d0[0].y = s;
+      chart.update("none");
+      $("metric-strike").textContent = fmtMoney(s);
+      updateStrikeNote();
+    }
+
+    /** Match Polymarket: first Chainlink observation time ≥ event start (minimize oracle timestamp). */
+    function tryLatchPriceToBeat(tMs, price) {
+      if (!bootstrap || bootstrap.event_start_ms == null) return;
+      if (bootstrap.strike_polymarket_official != null) return;
+      if (tMs < bootstrap.event_start_ms) return;
+      const key = PTB_STORAGE_PREFIX + bootstrap.slug;
+      let best = null;
+      try {
+        best = JSON.parse(sessionStorage.getItem(key) || "null");
+      } catch (e) {}
+      if (best && tMs >= best.t) return;
+      sessionStorage.setItem(key, JSON.stringify({ v: price, t: tMs }));
+      applyStrikeToChart(price);
+    }
+
+    function destroyChart() {
+      if (chart) {
+        chart.destroy();
+        chart = null;
+      }
+    }
+
+    function closePriceWs() {
+      liveQueue.length = 0;
+      liveFlushScheduled = false;
+      if (rtdsPingTimer) {
+        clearInterval(rtdsPingTimer);
+        rtdsPingTimer = null;
+      }
+      if (priceWs) {
+        try {
+          priceWs.close();
+        } catch (e) {}
+        priceWs = null;
+      }
+    }
+
+    function buildChart(b) {
+      destroyChart();
+      if (!b || !b.ok || !b.points || !b.points.length) return;
+
+      const ctx = $("price-chart").getContext("2d");
+      const strike = b.strike;
+      const xMin = b.event_start_ms;
+      const xMax = Math.max(b.window_end_ms, Date.now());
+
+      const priceData = b.points.map((pt) => ({ x: pt.t, y: pt.p }));
+
+      const targetData =
+        strike != null
+          ? [
+              { x: xMin, y: strike },
+              { x: xMax, y: strike },
+            ]
+          : [];
+
+      chart = new Chart(ctx, {
+        type: "line",
+        data: {
+          datasets: [
+            {
+              label: "Price",
+              data: priceData,
+              borderColor: "#ff9f43",
+              backgroundColor: "rgba(255, 159, 67, 0.08)",
+              borderWidth: 2,
+              pointRadius: 0,
+              tension: 0.42,
+              fill: true,
+            },
+            {
+              label: "Target",
+              data: targetData,
+              borderColor: "rgba(200, 205, 220, 0.55)",
+              borderWidth: 1.5,
+              borderDash: [6, 6],
+              pointRadius: 0,
+              tension: 0,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          elements: {
+            line: {
+              cubicInterpolationMode: "monotone",
+            },
+          },
+          interaction: { mode: "nearest", intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                title(items) {
+                  const x = items[0]?.parsed?.x;
+                  return x != null ? new Date(x).toLocaleTimeString() : "";
+                },
+              },
+            },
+          },
+          scales: {
+            x: {
+              type: "linear",
+              min: xMin,
+              max: xMax,
+              ticks: {
+                callback(v) {
+                  return new Date(v).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+                },
+                maxTicksLimit: 8,
+              },
+              grid: { color: "rgba(255,255,255,0.06)" },
+            },
+            y: {
+              position: "right",
+              grid: { color: "rgba(255,255,255,0.06)" },
+              ticks: {
+                callback(v) {
+                  return "$" + Number(v).toLocaleString();
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (priceData.length) {
+        const last = priceData[priceData.length - 1];
+        lastChainlinkSpot = last.y;
+        $("metric-spot").textContent = fmtMoney(last.y);
+        tintSpot(last.y, getEffectiveStrike());
+      }
+    }
+
+    function tintSpot(spot, strike) {
+      const el = $("metric-spot");
+      el.classList.remove("spot-above", "spot-below");
+      if (strike == null || spot == null || !Number.isFinite(spot) || !Number.isFinite(strike)) return;
+      el.classList.add(spot >= strike ? "spot-above" : "spot-below");
+    }
+
+    function queueLivePrice(price, tMs) {
+      liveQueue.push({ price, tMs });
+      if (!liveFlushScheduled) {
+        liveFlushScheduled = true;
+        requestAnimationFrame(flushLiveQueue);
+      }
+    }
+
+    /** One Chart.js redraw per animation frame; apply every RTDS tick (no 250ms merge). */
+    function flushLiveQueue() {
+      liveFlushScheduled = false;
+      if (!chart || !chart.data.datasets[0]) {
+        liveQueue.length = 0;
+        return;
+      }
+      const ds = chart.data.datasets[0].data;
+      let lastP = null;
+      while (liveQueue.length) {
+        const { price, tMs } = liveQueue.shift();
+        const last = ds[ds.length - 1];
+        if (last && tMs === last.x) {
+          last.y = price;
+        } else if (last && tMs < last.x) {
+          continue;
+        } else {
+          ds.push({ x: tMs, y: price });
+        }
+        while (ds.length > MAX_LIVE_POINTS) ds.shift();
+        lastP = { price, tMs };
+      }
+      if (bootstrap && bootstrap.window_end_ms != null && chart.options?.scales?.x) {
+        chart.options.scales.x.max = Math.max(
+          Number(bootstrap.window_end_ms),
+          Date.now() + 15_000
+        );
+      }
+      chart.update("none");
+      if (lastP) {
+        lastChainlinkSpot = lastP.price;
+        $("metric-spot").textContent = fmtMoney(lastP.price);
+        tintSpot(lastP.price, getEffectiveStrike());
+      }
+    }
+
+    /**
+     * Same Chainlink stream family Polymarket uses in the docs for crypto prices (not Binance trade ticks).
+     * Send PING every 5s per RTDS docs.
+     */
+    function connectChainlinkRtds(chainlinkSymbol) {
+      closePriceWs();
+      if (!chainlinkSymbol) return;
+      liveSymbolExpected = String(chainlinkSymbol).toLowerCase();
+      const wsUrl = "wss://ws-live-data.polymarket.com";
+      priceWs = new WebSocket(wsUrl);
+      priceWs.onopen = () => {
+        const sub = {
+          action: "subscribe",
+          subscriptions: [
+            {
+              topic: "crypto_prices_chainlink",
+              type: "*",
+              filters: JSON.stringify({ symbol: liveSymbolExpected }),
+            },
+          ],
+        };
+        priceWs.send(JSON.stringify(sub));
+        rtdsPingTimer = setInterval(() => {
+          if (priceWs && priceWs.readyState === WebSocket.OPEN) priceWs.send("PING");
+        }, 5000);
+      };
+      priceWs.onmessage = (ev) => {
+        const raw = ev.data;
+        if (typeof raw === "string" && raw === "PONG") return;
+        let msg;
+        try {
+          msg = JSON.parse(raw);
+        } catch (e) {
+          return;
+        }
+        const batch = Array.isArray(msg) ? msg : [msg];
+        for (const m of batch) {
+          if (!m || m.topic !== "crypto_prices_chainlink" || !m.payload) continue;
+          const ps = String(m.payload.symbol || "").toLowerCase();
+          if (ps !== liveSymbolExpected) continue;
+          const v = parseFloat(m.payload.value);
+          if (!Number.isFinite(v)) continue;
+          const t =
+            m.payload.timestamp != null
+              ? Number(m.payload.timestamp)
+              : m.timestamp != null
+                ? Number(m.timestamp)
+                : Date.now();
+          tryLatchPriceToBeat(t, v);
+          queueLivePrice(v, t);
+        }
+      };
+    }
+
+    async function loadChart(asset, windowTs) {
+      const r = await fetch("/api/chart-bootstrap?asset=" + encodeURIComponent(asset) + "&window=" + windowTs);
+      bootstrap = await r.json();
+      if (!bootstrap.ok) {
+        $("metric-strike").textContent = "—";
+        $("metric-strike-note").textContent = "";
+        closePriceWs();
+        renderSignalPlaceholder("Chart unavailable.");
+        return;
+      }
+      $("chart-market-title").textContent = (bootstrap.title || asset + " Up or Down") + " — 5m";
+      $("metric-strike").textContent = bootstrap.strike != null ? fmtMoney(bootstrap.strike) : "—";
+      updateStrikeNote();
+      buildChart(bootstrap);
+      const latched = readLatchedPriceToBeat(bootstrap.slug);
+      if (bootstrap.strike_polymarket_official == null && latched != null) {
+        applyStrikeToChart(latched);
+      }
+      connectChainlinkRtds(bootstrap.chainlink_symbol);
+      refreshSignal();
+    }
+
+    function renderSignalPlaceholder(msg) {
+      $("signal-primary").textContent = "—";
+      $("signal-primary").className = "signal-pill signal-neutral";
+      $("signal-confidence").textContent = msg || "";
+      $("signal-metrics").textContent = "";
+      $("signal-reasons").innerHTML = "";
+      $("signal-sell-block").textContent = "";
+      $("signal-apply").hidden = true;
+      lastSignalPrimary = null;
+    }
+
+    function renderSignalPayload(j) {
+      const prim = j.primary || "NEUTRAL";
+      lastSignalPrimary = prim;
+      const pill = $("signal-primary");
+      if (prim === "UP") {
+        pill.textContent = "Lean Up";
+        pill.className = "signal-pill signal-up";
+      } else if (prim === "DOWN") {
+        pill.textContent = "Lean Down";
+        pill.className = "signal-pill signal-down";
+      } else {
+        pill.textContent = "No clear edge";
+        pill.className = "signal-pill signal-neutral";
+      }
+      $("signal-confidence").textContent =
+        "Confidence ~" +
+        j.confidence +
+        "% · " +
+        String(j.strength || "").replace(/_/g, " ");
+      let midLine = "Model P(Up) ≈ " + (j.fair_p_up * 100).toFixed(1) + "%";
+      if (j.mid_up != null) midLine += " · Up mid " + (j.mid_up * 100).toFixed(1) + "¢";
+      if (j.mid_down != null) midLine += " · Down mid " + (j.mid_down * 100).toFixed(1) + "¢";
+      if (j.edge_buy_up != null) {
+        const e = j.edge_buy_up * 100;
+        midLine += " · buy Up (fair−ask/mid) " + (e >= 0 ? "+" : "") + e.toFixed(1) + "pp";
+      }
+      if (j.edge_buy_down != null) {
+        const e2 = j.edge_buy_down * 100;
+        midLine += " · buy Down " + (e2 >= 0 ? "+" : "") + e2.toFixed(1) + "pp";
+      }
+      if (j.edge_sell_up != null) {
+        const s = j.edge_sell_up * 100;
+        midLine += " · exit Up (bid−fair) " + (s >= 0 ? "+" : "") + s.toFixed(1) + "pp";
+      }
+      if (j.edge_sell_down != null) {
+        const s2 = j.edge_sell_down * 100;
+        midLine += " · exit Down " + (s2 >= 0 ? "+" : "") + s2.toFixed(1) + "pp";
+      }
+      $("signal-metrics").textContent = midLine;
+      const sblk = $("signal-sell-block");
+      if (j.sell) {
+        let sellTxt = "";
+        if (j.sell.for_holding) {
+          sellTxt +=
+            "Position-aware: " +
+            String(j.sell.for_holding).replace(/_/g, " ") +
+            " · ";
+        }
+        sellTxt +=
+          "Exit quality — Up token: " +
+          String(j.sell.up).replace(/_/g, " ") +
+          " · Down token: " +
+          String(j.sell.down).replace(/_/g, " ") +
+          ". Positive exit pp = bids rich vs model (better seller); negative = weak bids.";
+        sblk.textContent = sellTxt;
+      } else {
+        sblk.textContent = "";
+      }
+      const ul = $("signal-reasons");
+      ul.innerHTML = "";
+      if (j.reasons && j.reasons.length) {
+        for (const r of j.reasons) {
+          const li = document.createElement("li");
+          li.textContent = r;
+          ul.appendChild(li);
+        }
+      }
+      const apply = $("signal-apply");
+      if (prim === "UP" || prim === "DOWN") {
+        apply.hidden = false;
+        apply.textContent = prim === "UP" ? "Select Up in form →" : "Select Down in form →";
+      } else {
+        apply.hidden = true;
+      }
+    }
+
+    async function refreshSignal() {
+      if (!bootstrap || !bootstrap.ok) {
+        renderSignalPlaceholder("Load chart for insight.");
+        return;
+      }
+      const strike = getEffectiveStrike();
+      if (strike == null || !Number.isFinite(strike)) {
+        renderSignalPlaceholder("Waiting for price to beat…");
+        return;
+      }
+      const asset = $("chart-asset").value || "BTC";
+      const w =
+        lastPayload && lastPayload.current
+          ? lastPayload.current.window_ts
+          : bootstrap.window_ts != null
+            ? bootstrap.window_ts
+            : currentWindowTs();
+      let url =
+        "/api/signal?asset=" +
+        encodeURIComponent(asset) +
+        "&window=" +
+        encodeURIComponent(String(w)) +
+        "&strike=" +
+        encodeURIComponent(String(strike)) +
+        "&strike_quality=" +
+        encodeURIComponent(getStrikeQualityParam());
+      if (lastChainlinkSpot != null && Number.isFinite(lastChainlinkSpot)) {
+        url += "&spot=" + encodeURIComponent(String(lastChainlinkSpot));
+      }
+      let holdingParam = "none";
+      if (
+        tradeTab === "sell" &&
+        sidebarPositionShares != null &&
+        sidebarPositionShares > 1e-6
+      ) {
+        holdingParam = sidebarOutcome === "up" ? "up" : "down";
+      }
+      url += "&holding=" + encodeURIComponent(holdingParam);
+      try {
+        const r = await fetch(url);
+        const j = await r.json();
+        if (!j.ok) {
+          const er = j.error || "error";
+          let friendly = er;
+          if (er === "window_closed") friendly = "Window ended — insight updates on next 5m.";
+          else if (er === "strike_unavailable") friendly = "Strike missing — wait for official or RTDS latch.";
+          else if (er === "spot_unavailable") friendly = "No spot yet — wait for Chainlink or chart.";
+          else if (er === "market_unavailable") friendly = "Order book unavailable for this asset.";
+          renderSignalPlaceholder(friendly);
+          return;
+        }
+        renderSignalPayload(j);
+      } catch (e) {
+        renderSignalPlaceholder("Could not load insight.");
+      }
+    }
+
+    async function refreshCalibration() {
+      const fil = $("calibration-asset").value;
+      let url = "/api/calibration";
+      if (fil) url += "?asset=" + encodeURIComponent(fil);
+      const st = $("calibration-stats");
+      const canvas = $("calibration-chart");
+      try {
+        const r = await fetch(url);
+        const j = await r.json();
+        if (!j.ok) {
+          st.textContent = "Calibration unavailable.";
+          return;
+        }
+        const resolved = j.resolved_n || 0;
+        if (resolved === 0) {
+          st.textContent =
+            "No resolved windows yet. Keep the dashboard open across 5m boundaries — we log each Insight refresh and resolve ~45s after each window ends.";
+          if (calibrationChart) {
+            calibrationChart.destroy();
+            calibrationChart = null;
+          }
+          return;
+        }
+        let ht = "Resolved windows: " + resolved;
+        if (j.brier_mean != null) ht += " · Brier (lower is better): " + j.brier_mean;
+        if (j.lean_up && j.lean_up.n > 0 && j.lean_up.hit_rate != null) {
+          ht +=
+            " · Lean Up → Up won: " +
+            (j.lean_up.hit_rate * 100).toFixed(0) +
+            "% (" +
+            j.lean_up.n +
+            ")";
+        }
+        if (j.lean_down && j.lean_down.n > 0 && j.lean_down.hit_rate != null) {
+          ht +=
+            " · Lean Down → Down won: " +
+            (j.lean_down.hit_rate * 100).toFixed(0) +
+            "% (" +
+            j.lean_down.n +
+            ")";
+        }
+        if (j.neutral_n) ht += " · Neutral calls logged: " + j.neutral_n;
+        st.textContent = ht;
+
+        const withData = j.buckets.filter((b) => b.n > 0);
+        if (!withData.length) {
+          if (calibrationChart) {
+            calibrationChart.destroy();
+            calibrationChart = null;
+          }
+          return;
+        }
+        const labels = withData.map((b) => b.label);
+        const actuals = withData.map((b) => (b.actual_rate != null ? b.actual_rate : 0));
+        const preds = withData.map((b) => (b.pred_mean != null ? b.pred_mean : 0));
+        const ctx = canvas.getContext("2d");
+        if (calibrationChart) calibrationChart.destroy();
+        calibrationChart = new Chart(ctx, {
+          type: "bar",
+          data: {
+            labels,
+            datasets: [
+              {
+                type: "bar",
+                label: "Actual Up won",
+                data: actuals,
+                backgroundColor: "rgba(79, 140, 255, 0.35)",
+                borderColor: "rgba(79, 140, 255, 0.55)",
+                borderWidth: 1,
+              },
+              {
+                type: "line",
+                label: "Avg predicted P(Up)",
+                data: preds,
+                borderColor: "#ff9f43",
+                borderWidth: 2,
+                tension: 0.25,
+                spanGaps: false,
+                pointRadius: 4,
+                pointBackgroundColor: "#ff9f43",
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: true, labels: { color: "#c8cdd8" } },
+            },
+            scales: {
+              x: {
+                ticks: { color: "#8b92a5", maxRotation: 45 },
+                grid: { color: "rgba(255,255,255,0.06)" },
+              },
+              y: {
+                min: 0,
+                max: 1,
+                ticks: {
+                  color: "#8b92a5",
+                  callback(v) {
+                    return (Number(v) * 100).toFixed(0) + "%";
+                  },
+                },
+                grid: { color: "rgba(255,255,255,0.06)" },
+              },
+            },
+          },
+        });
+      } catch (e) {
+        st.textContent = "Could not load calibration.";
+        console.error(e);
+      }
+    }
+
+    function syncChartAssetSelect() {
+      const sel = $("chart-asset");
+      const assets = ["BTC", "ETH", "SOL", "XRP"];
+      const v = sel.value;
+      sel.innerHTML = "";
+      for (const a of assets) {
+        const o = document.createElement("option");
+        o.value = a;
+        o.textContent = a;
+        sel.appendChild(o);
+      }
+      if (assets.includes(v)) sel.value = v;
+    }
+
+    async function refreshMe() {
+      const w = $("wallet-strip");
+      let j;
+      try {
+        const r = await fetch("/api/me");
+        j = await r.json();
+      } catch (e) {
+        lastMe = { trading_enabled: false, authenticated: false };
+        w.innerHTML =
+          "<span class=\"warn\">Cannot reach /api/me — open the app at <code>http://127.0.0.1:8765</code> (not a file URL).</span>";
+        return {};
+      }
+      lastMe = j;
+      if (!j.authenticated) {
+        let html = "<span class=\"warn\">" + esc(j.error || "Not signed in") + "</span>";
+        if (j.hint) {
+          html += "<br/><span class=\"muted small\">" + esc(j.hint) + "</span>";
+        }
+        if (j.configured === false) {
+          html +=
+            "<br/><span class=\"muted small\">Tip: .env must live next to <code>config.py</code>; restart <code>python main.py dashboard</code> after edits.</span>";
+        }
+        w.innerHTML = html;
+        $("trade-gate").textContent = "Fix .env / CLOB auth (see header) to enable wallet + orders.";
+        $("of-submit").disabled = true;
+        $("sidebar-submit").disabled = true;
+        $("sidebar-balance").textContent = "Connect wallet in .env to see balance.";
+        const gh = $("sidebar-gate-hint");
+        gh.hidden = false;
+        gh.textContent =
+          "Buy/Sell is disabled until the wallet above is connected. After that, set DASHBOARD_ENABLE_ORDER_POST=true in .env and restart the dashboard.";
+        return j;
+      }
+      const colFmt = formatCollateralSummary(j.collateral);
+      let bal = colFmt.html;
+      if (j.balance_error) {
+        bal += "<div class=\"warn small\">" + esc(j.balance_error) + "</div>";
+      }
+      let walletHtml = "<div class=\"wallet-card\">";
+      walletHtml +=
+        "<div class=\"wallet-row\"><span class=\"wallet-k\">Signer</span> " +
+        "<code class=\"wallet-addr\" title=\"" +
+        esc(j.signer_address || "") +
+        "\">" +
+        esc(shortAddr(j.signer_address)) +
+        "</code></div>";
+      if (j.funder_address) {
+        walletHtml +=
+          "<div class=\"wallet-row\"><span class=\"wallet-k\">Funder</span> " +
+          "<code class=\"wallet-addr\" title=\"" +
+          esc(j.funder_address) +
+          "\">" +
+          esc(shortAddr(j.funder_address)) +
+          "</code></div>";
+      }
+      walletHtml += bal;
+      if (j.wallet_warnings && j.wallet_warnings.length) {
+        for (const msg of j.wallet_warnings) {
+          walletHtml += "<div class=\"warn small wallet-warn\">" + esc(msg) + "</div>";
+        }
+      }
+      walletHtml += "</div>";
+      w.innerHTML = walletHtml;
+      const gate = $("trade-gate");
+      const gh = $("sidebar-gate-hint");
+      if (j.trading_enabled) {
+        gate.textContent = "Trading from this UI is ON.";
+        gate.classList.add("warn");
+        $("of-submit").disabled = false;
+        gh.hidden = true;
+        gh.textContent = "";
+      } else {
+        gate.textContent =
+          "Wallet OK — enable posting: DASHBOARD_ENABLE_ORDER_POST=true (or 1) in .env, then restart the dashboard.";
+        gate.classList.remove("warn");
+        $("of-submit").disabled = true;
+        gh.hidden = false;
+        gh.textContent =
+          j.trading_gate_hint ||
+          "Add DASHBOARD_ENABLE_ORDER_POST=true to .env and restart python main.py dashboard.";
+      }
+      $("sidebar-submit").disabled = !j.trading_enabled;
+      return j;
+    }
+
+    function rowForAsset(asset) {
+      if (!lastPayload) return null;
+      return lastPayload.current.rows.find((r) => r.asset === asset && r.ok);
+    }
+
+    function updateSidebarPrices() {
+      const asset = $("chart-asset").value;
+      const row = rowForAsset(asset);
+      const upEl = $("btn-up-price");
+      const dnEl = $("btn-down-price");
+      const link = $("pm-external-link");
+      if (!row) {
+        upEl.textContent = "—";
+        dnEl.textContent = "—";
+        return;
+      }
+      const up = row.sides[0];
+      const dn = row.sides[1];
+      const upPx = tradeTab === "buy" ? up.best_ask : up.best_bid;
+      const dnPx = tradeTab === "buy" ? dn.best_ask : dn.best_bid;
+      upEl.textContent = priceCell(upPx);
+      dnEl.textContent = priceCell(dnPx);
+      link.href = row.event_url;
+    }
+
+    function updateCtaLabel() {
+      const side = tradeTab === "buy" ? "Buy" : "Sell";
+      const out = sidebarOutcome === "up" ? "Up" : "Down";
+      $("sidebar-submit").textContent = side + " " + out;
+    }
+
+    function showSidebarToast(msg, isErr) {
+      const el = $("sidebar-toast");
+      if (!msg) {
+        el.hidden = true;
+        el.textContent = "";
+        el.classList.remove("warn");
+        return;
+      }
+      el.hidden = false;
+      el.textContent = msg;
+      el.classList.toggle("warn", !!isErr);
+    }
+
+    function updateSidebarAmountUI() {
+      const buy = tradeTab === "buy";
+      $("sidebar-amount-label").textContent = buy
+        ? "Amount (USDC, limit at best ask)"
+        : "Shares to sell (limit at best bid)";
+      $("sidebar-amount-wrap").classList.toggle("buy-mode", buy);
+      $("sidebar-amount-wrap").classList.toggle("sell-mode", !buy);
+      $("quick-buy-amt").classList.toggle("hidden", !buy);
+      $("quick-sell-amt").classList.toggle("hidden", buy);
+      $("sidebar-dollar").style.display = buy ? "" : "none";
+      const inp = $("sidebar-amount");
+      inp.step = buy ? "0.01" : "1";
+      inp.min = buy ? "0" : "1";
+      if (!buy && (parseFloat(inp.value) || 0) < 1) inp.value = "1";
+      const sub = $("sidebar-submit");
+      sub.classList.toggle("cta-buy", buy);
+      sub.classList.toggle("cta-sell", !buy);
+      updateCtaLabel();
+      updateSidebarEstimate();
+      refreshSidebarPosition(true);
+    }
+
+    function updateSidebarEstimate() {
+      const el = $("sidebar-estimate");
+      const row = rowForAsset($("chart-asset").value);
+      if (!row) {
+        el.textContent = "";
+        return;
+      }
+      const idx = sidebarOutcome === "up" ? 0 : 1;
+      const side = row.sides[idx];
+      const buy = tradeTab === "buy";
+      const price = buy ? side.best_ask ?? side.mid : side.best_bid ?? side.mid;
+      const amt = parseFloat($("sidebar-amount").value) || 0;
+      const minHint =
+        row.order_min_size != null
+          ? " Min " + row.order_min_size + " shares on this market."
+          : "";
+      if (price == null || price <= 0) {
+        el.textContent = "Waiting for book…";
+        return;
+      }
+      if (amt <= 0) {
+        el.textContent = "GTC limit @ best " + (buy ? "ask" : "bid") + "." + minHint;
+        return;
+      }
+      if (buy) {
+        const sh = Math.max(1, Math.round(amt / price));
+        el.textContent =
+          "≈ " +
+          sh +
+          " shares at " +
+          priceCell(price) +
+          " · ~" +
+          fmtMoney(sh * price) +
+          " notional." +
+          minHint;
+      } else {
+        const sh = Math.floor(amt);
+        if (sh < 1) {
+          el.textContent = "Enter at least 1 share." + minHint;
+          return;
+        }
+        el.textContent =
+          "≈ " +
+          fmtMoney(sh * price) +
+          " USDC if filled at " +
+          priceCell(price) +
+          " (" +
+          sh +
+          " shares)." +
+          minHint;
+      }
+    }
+
+    async function refreshSidebarPosition(force) {
+      const line = $("sidebar-balance");
+      if (tradeTab === "buy") {
+        line.textContent = "Spend USDC from header balance. GTC limit @ best ask.";
+        sidebarPositionShares = null;
+        return;
+      }
+      if (!lastMe.authenticated) {
+        line.textContent = "Sign in to load share balance for selling.";
+        sidebarPositionShares = null;
+        return;
+      }
+      const row = rowForAsset($("chart-asset").value);
+      if (!row) {
+        line.textContent = "—";
+        sidebarPositionShares = null;
+        return;
+      }
+      const now = Date.now();
+      if (
+        !force &&
+        sidebarPositionFetchAt > 0 &&
+        now - sidebarPositionFetchAt < SIDEBAR_POSITION_MIN_MS
+      ) {
+        return;
+      }
+      const idx = sidebarOutcome === "up" ? 0 : 1;
+      const tid = row.sides[idx].token_id;
+      line.textContent = "Loading position…";
+      try {
+        const r = await fetch("/api/token-balance?token_id=" + encodeURIComponent(tid));
+        const j = await r.json();
+        sidebarPositionShares =
+          j.ok && j.balance != null && Number.isFinite(Number(j.balance)) ? Number(j.balance) : null;
+      } catch (e) {
+        sidebarPositionShares = null;
+      }
+      sidebarPositionFetchAt = Date.now();
+      if (sidebarPositionShares == null) {
+        line.textContent =
+          "Could not read conditional balance (check funder / RPC). Use Advanced limit to sell by size.";
+        return;
+      }
+      line.textContent =
+        "Wallet ≈ " +
+        sidebarPositionShares.toLocaleString(undefined, { maximumFractionDigits: 4 }) +
+        " shares of this outcome · Max sets sell size.";
+    }
+
+    function renderMarkets(payload) {
+      lastPayload = payload;
+      const cur = payload.current;
+      $("chart-window-label").textContent =
+        fmtClock(cur.window_ts) + " → " + fmtClock(cur.window_end) + " · window " + cur.window_ts;
+
+      $("metric-countdown").textContent = countdown(cur.window_end, cur.server_time);
+
+      const root = $("markets");
+      root.innerHTML = "";
+      for (const row of cur.rows) {
+        const el = document.createElement("div");
+        el.className = "mini-card" + (row.ok ? "" : " mini-bad");
+        if (!row.ok) {
+          el.textContent = row.asset + ": " + (row.error || "—");
+          root.appendChild(el);
+          continue;
+        }
+        el.innerHTML =
+          "<strong>" + row.asset + "</strong> " +
+          priceCell(row.sides[0].best_ask) + " ↑ / " +
+          priceCell(row.sides[1].best_ask) + " ↓";
+        el.style.cursor = "pointer";
+        el.addEventListener("click", () => {
+          $("chart-asset").value = row.asset;
+          $("chart-asset").dispatchEvent(new Event("change"));
+        });
+        root.appendChild(el);
+      }
+
+      const sel = $("of-asset");
+      const keep = sel.value;
+      sel.innerHTML = "";
+      for (const row of cur.rows) {
+        if (!row.ok) continue;
+        const o = document.createElement("option");
+        o.value = row.asset;
+        o.textContent = row.asset;
+        sel.appendChild(o);
+      }
+      if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+
+      updateSidebarPrices();
+      updateSidebarEstimate();
+      const wts = cur.window_ts;
+      const windowChanged = lastSidebarPositionWindowTs !== wts;
+      lastSidebarPositionWindowTs = wts;
+      refreshSidebarPosition(windowChanged);
+    }
+
+    async function refreshOrders() {
+      const el = $("orders");
+      const r = await fetch("/api/orders");
+      if (r.status === 401) {
+        el.textContent = "Sign in to view orders.";
+        return;
+      }
+      const j = await r.json();
+      if (!j.ok) {
+        el.textContent = j.error || "Failed";
+        return;
+      }
+      if (!j.orders || !j.orders.length) {
+        el.innerHTML = "<span class=\"muted\">No open orders.</span>";
+        return;
+      }
+      const canCancel = lastMe.trading_enabled === true;
+      const wrap = document.createElement("div");
+      wrap.className = "orders-list";
+      for (const o of j.orders) {
+        const oid = o.id || o.orderID || o.order_id;
+        const side = (o.side || "").toUpperCase();
+        const price = o.price != null ? Number(o.price) : null;
+        const orig = o.original_size != null ? o.original_size : o.originalSize;
+        const matched = o.size_matched != null ? o.size_matched : o.sizeMatched;
+        const out = o.outcome || "";
+        const row = document.createElement("div");
+        row.className = "order-row";
+        const line =
+          "<span class=\"order-side\">" +
+          esc(side) +
+          "</span> " +
+          (out ? "<span class=\"muted\">" + esc(out) + "</span> · " : "") +
+          "@" +
+          (price != null && !Number.isNaN(price) ? esc(priceCell(price)) : "—") +
+          " · size " +
+          esc(String(orig ?? "—")) +
+          (matched != null ? " (matched " + esc(String(matched)) + ")" : "");
+        row.innerHTML =
+          "<div class=\"order-row-main\">" + line + "</div>" +
+          (oid && canCancel
+            ? "<button type=\"button\" class=\"order-cancel\" data-oid=\"" +
+              esc(String(oid)) +
+              "\">Cancel</button>"
+            : "<span class=\"muted small\">Enable posting to cancel here</span>");
+        wrap.appendChild(row);
+      }
+      el.innerHTML = "";
+      el.appendChild(wrap);
+      wrap.querySelectorAll(".order-cancel").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const id = btn.getAttribute("data-oid");
+          if (!id) return;
+          const r2 = await fetch("/api/cancel-order", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ order_id: id }),
+          });
+          const j2 = await r2.json();
+          if (!j2.ok) showSidebarToast(j2.error || "Cancel failed", true);
+          else showSidebarToast("Order canceled.", false);
+          await refreshOrders();
+          refreshSidebarPosition(true);
+        });
+      });
+    }
+
+    document.querySelectorAll(".tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        tradeTab = btn.dataset.tab;
+        updateSidebarPrices();
+        updateSidebarAmountUI();
+      });
+    });
+
+    $("btn-up").addEventListener("click", () => {
+      sidebarOutcome = "up";
+      $("btn-up").classList.add("selected");
+      $("btn-down").classList.remove("selected");
+      updateCtaLabel();
+      updateSidebarEstimate();
+      refreshSidebarPosition(true);
+    });
+    $("btn-down").addEventListener("click", () => {
+      sidebarOutcome = "down";
+      $("btn-down").classList.add("selected");
+      $("btn-up").classList.remove("selected");
+      updateCtaLabel();
+      updateSidebarEstimate();
+      refreshSidebarPosition(true);
+    });
+    $("btn-up").classList.add("selected");
+
+    $("signal-apply").addEventListener("click", () => {
+      if (lastSignalPrimary === "UP") $("btn-up").click();
+      else if (lastSignalPrimary === "DOWN") $("btn-down").click();
+    });
+
+    document.querySelectorAll("#quick-buy-amt button").forEach((b) => {
+      b.addEventListener("click", () => {
+        const add = parseFloat(b.dataset.amt) || 0;
+        const inp = $("sidebar-amount");
+        inp.value = String((parseFloat(inp.value) || 0) + add);
+        updateSidebarEstimate();
+      });
+    });
+    document.querySelectorAll("#quick-sell-amt button[data-shares]").forEach((b) => {
+      b.addEventListener("click", () => {
+        const add = parseInt(b.dataset.shares, 10) || 0;
+        const inp = $("sidebar-amount");
+        inp.value = String((parseInt(inp.value, 10) || 0) + add);
+        updateSidebarEstimate();
+      });
+    });
+    $("sidebar-max").addEventListener("click", () => {
+      if (sidebarPositionShares != null && sidebarPositionShares > 0) {
+        $("sidebar-amount").value = String(Math.floor(sidebarPositionShares));
+        updateSidebarEstimate();
+      }
+    });
+    $("sidebar-amount").addEventListener("input", updateSidebarEstimate);
+
+    $("chart-asset").addEventListener("change", async () => {
+      const w = lastPayload ? lastPayload.current.window_ts : currentWindowTs();
+      await loadChart($("chart-asset").value, w);
+      updateSidebarPrices();
+      updateSidebarEstimate();
+      refreshSidebarPosition(true);
+    });
+
+    $("order-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const out = $("order-result");
+      out.textContent = "";
+      if (!lastPayload) return;
+      const asset = $("of-asset").value;
+      const row = lastPayload.current.rows.find((r) => r.asset === asset && r.ok);
+      if (!row) {
+        out.textContent = "No market data for asset.";
+        return;
+      }
+      const idx = parseInt($("of-side-outcome").value, 10);
+      const token_id = row.sides[idx].token_id;
+      const body = {
+        token_id,
+        side: $("of-side").value,
+        price: parseFloat($("of-price").value),
+        size_shares: parseFloat($("of-size").value),
+      };
+      const r = await fetch("/api/order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      out.textContent = JSON.stringify(j, null, 2);
+      refreshOrders();
+    });
+
+    $("sidebar-order").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const asset = $("chart-asset").value;
+      const row = rowForAsset(asset);
+      if (!row) return;
+      const amt = parseFloat($("sidebar-amount").value) || 0;
+      const idx = sidebarOutcome === "up" ? 0 : 1;
+      const side = row.sides[idx];
+      const price =
+        tradeTab === "buy"
+          ? side.best_ask ?? side.mid
+          : side.best_bid ?? side.mid;
+      if (price == null || price <= 0) {
+        showSidebarToast("No price yet — wait for order book.", true);
+        return;
+      }
+      if (amt <= 0) {
+        showSidebarToast(tradeTab === "buy" ? "Enter a USDC amount." : "Enter shares to sell.", true);
+        return;
+      }
+      const buy = tradeTab === "buy";
+      const size_shares = buy
+        ? Math.max(1, Math.round(amt / price))
+        : Math.max(1, Math.floor(amt));
+      const minSz = row.order_min_size;
+      if (minSz != null && size_shares < minSz) {
+        showSidebarToast("Minimum size is " + minSz + " shares on this market.", true);
+        return;
+      }
+      const r = await fetch("/api/order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token_id: side.token_id,
+          side: buy ? "BUY" : "SELL",
+          price,
+          size_shares,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) showSidebarToast(j.error || "Order failed", true);
+      else showSidebarToast("Order submitted (GTC). Check Open orders below.", false);
+      refreshOrders();
+      refreshSidebarPosition(true);
+    });
+
+    let lastChartWindow = null;
+
+    async function tick() {
+      try {
+        const r = await fetch("/api/updown");
+        const j = await r.json();
+        renderMarkets(j);
+        const w = j.current.window_ts;
+        if (w !== lastChartWindow) {
+          lastChartWindow = w;
+          await loadChart($("chart-asset").value || "BTC", w);
+        } else {
+          $("metric-countdown").textContent = countdown(j.current.window_end, j.current.server_time);
+          updateSidebarPrices();
+          updateSidebarEstimate();
+        }
+      } catch (e) {
+        console.error(e);
+      }
+      await refreshMe();
+      await refreshOrders();
+      await refreshSignal();
+      calibrationSkip += 1;
+      if (calibrationSkip >= 4) {
+        calibrationSkip = 0;
+        await refreshCalibration();
+      }
+    }
+
+    syncChartAssetSelect();
+    updateSidebarAmountUI();
+
+    $("calibration-asset").addEventListener("change", () => {
+      calibrationSkip = 0;
+      refreshCalibration();
+    });
+
+    async function pollOfficialStrikeIfNeeded() {
+      try {
+        if (!bootstrap || bootstrap.strike_polymarket_official != null) return;
+        if (bootstrap.window_ts == null) return;
+        const asset = $("chart-asset").value || "BTC";
+        const r = await fetch(
+          "/api/polymarket-strike?asset=" +
+            encodeURIComponent(asset) +
+            "&window=" +
+            bootstrap.window_ts
+        );
+        const j = await r.json();
+        if (!j.ok || j.strike_polymarket_official == null) return;
+        bootstrap.strike_polymarket_official = j.strike_polymarket_official;
+        bootstrap.strike = j.strike_polymarket_official;
+        bootstrap.strike_source = "polymarket_api";
+        try {
+          sessionStorage.removeItem(PTB_STORAGE_PREFIX + bootstrap.slug);
+        } catch (e) {}
+        applyStrikeToChart(j.strike_polymarket_official);
+      } catch (e) {}
+    }
+
+    (async () => {
+      await tick();
+      await refreshCalibration();
+      setInterval(tick, 1000);
+      setInterval(pollOfficialStrikeIfNeeded, 4000);
+    })();
+  </script>
+</body>
+</html>

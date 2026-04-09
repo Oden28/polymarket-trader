@@ -5,7 +5,15 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env file from project root
-load_dotenv(Path(__file__).parent / ".env")
+load_dotenv(Path(__file__).parent / ".env", encoding="utf-8-sig")
+
+
+def _load_poly_private_key() -> str:
+    """Support POLY_PRIVATE_KEY (preferred) or PRIVATE_KEY; trim whitespace / wrapping quotes."""
+    v = (os.getenv("POLY_PRIVATE_KEY") or os.getenv("PRIVATE_KEY") or "").strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        v = v[1:-1].strip()
+    return v
 
 
 @dataclass
@@ -13,9 +21,7 @@ class TradingConfig:
     """Trading bot configuration loaded from environment variables."""
 
     # ── Polymarket connection ──────────────────────────────────────────
-    poly_private_key: str = field(
-        default_factory=lambda: os.getenv("POLY_PRIVATE_KEY", "")
-    )
+    poly_private_key: str = field(default_factory=_load_poly_private_key)
     poly_api_url: str = field(
         default_factory=lambda: os.getenv(
             "POLY_API_URL", "https://clob.polymarket.com"
@@ -99,7 +105,9 @@ class TradingConfig:
         """Return a list of configuration problems (empty = OK)."""
         issues: list[str] = []
         if not self.is_configured:
-            issues.append("POLY_PRIVATE_KEY is missing or too short")
+            issues.append(
+                "POLY_PRIVATE_KEY (or PRIVATE_KEY) is missing or too short"
+            )
         if self.needs_funder and not self.poly_funder_address:
             issues.append(
                 f"POLY_FUNDER_ADDRESS required for signature_type={self.poly_signature_type}"

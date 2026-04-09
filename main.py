@@ -179,6 +179,7 @@ Usage:
     python main.py              Start the trading bot
     python main.py test         Run in test mode (analyse only)
     python main.py scan         Scan active markets
+    python main.py dashboard  Local web UI (5m Up/Down + wallet)
     python main.py help         Show this help message
 
 Environment:
@@ -210,6 +211,10 @@ if __name__ == "__main__":
             asyncio.run(test_mode())
         elif cmd in ("scan", "markets"):
             asyncio.run(scan_markets())
+        elif cmd in ("dashboard", "dash", "ui"):
+            from dashboard_server import run_dashboard
+
+            run_dashboard()
         elif cmd in ("help", "h"):
             print_help()
         else:
